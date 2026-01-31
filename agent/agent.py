@@ -175,10 +175,98 @@ async def entrypoint(ctx: JobContext):
     
     # Connect to the room
     await ctx.connect()
+    
+    # --------------------------------------------------------------------------
+    # Audio Playback Logic
+    # --------------------------------------------------------------------------
+    from livekit import rtc
+    import asyncio
+    
+    async def _play_audio_file(file_path: str, loop: bool = False, volume: float = 1.0):
+        """Plays an audio file into the room."""
+        try:
+            source = rtc.AudioSource(24000, 1) # 24kHz, 1 channel
+            track = rtc.LocalAudioTrack.create_audio_track("audio_player", source)
+            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            publication = await ctx.room.local_participant.publish_track(track, options)
+            
+            import av
+
+            while True:
+                try:
+                    container = av.open(file_path)
+                    stream = container.streams.audio[0]
+                    resampler = av.AudioResampler(
+                        format='s16',
+                        layout='mono',
+                        rate=24000,
+                    )
+
+                    for frame in container.decode(stream):
+                        frames = resampler.resample(frame)
+                        for f in frames:
+                           data = f.to_ndarray().tobytes()
+                           if volume != 1.0:
+                               import numpy as np
+                               audio_data = np.frombuffer(data, dtype=np.int16)
+                               audio_data = (audio_data * volume).astype(np.int16)
+                               data = audio_data.tobytes()
+                               
+                           audio_frame = rtc.AudioFrame(
+                               data=data,
+                               sample_rate=24000,
+                               num_channels=1,
+                               samples_per_channel=f.samples
+                           )
+                           await source.capture_frame(audio_frame)
+                    
+                    container.close()
+                    
+                except Exception as e:
+                    logger.error(f"Error reading audio file {file_path}: {e}")
+                    break
+                    
+                if not loop:
+                    break
+                    
+            await ctx.room.local_participant.unpublish_track(publication.sid)
+            
+        except Exception as e:
+             logger.error(f"Failed to play audio {file_path}: {e}")
+
+    # 1. Play Intro Sound (Machine Gun)
+    intro_path = os.path.join(os.path.dirname(__file__), "playback_audios", "machine-gun-01.wav")
+    if os.path.exists(intro_path):
+        logger.info(f"Playing intro audio: {intro_path}")
+        # Run in background (fire and forget? or wait?) - Wait so it plays BEFORE hello
+        await _play_audio_file(intro_path, loop=False, volume=0.5)
+    else:
+        logger.warning(f"Intro audio not found at: {intro_path}")
+
+    # 2. Start Background Loop (Fire and forget task)
+    bg_path = os.path.join(os.path.dirname(__file__), "playback_audios", "bg.mp3")
+    if os.path.exists(bg_path):
+        bg_volume = 0.1
+        try:
+             if "bg_volume" in metadata:
+                 bg_volume = float(metadata.get("bg_volume"))
+        except: pass
+        
+        logger.info(f"Starting background audio: {bg_path} (Vol: {bg_volume})")
+        asyncio.create_task(_play_audio_file(bg_path, loop=True, volume=bg_volume))
+    else:
+        logger.warning(f"Background audio not found at: {bg_path}")
+    
+    # --------------------------------------------------------------------------
+    
+    # 3. Dynamic Greeting based on Persona
+    if instructions:
+         initial_greeting = "Welcome Sherlock and Watson to the game of LIFE!"
+         
     await session.say(
-   "Hello. How can I help you today?",
-   allow_interruptions=True,
-)
+       initial_greeting,
+       allow_interruptions=False,
+    )
     logger.info(f"Agent successfully started in room: {ctx.room.name}")
 
 

@@ -420,6 +420,14 @@ async def demo_page():
                     <label>Your Role</label>
                     <input type="text" id="userRole" placeholder="e.g. Detective, Suspect" value="Detective">
                 </div>
+                <!-- Volume Control -->
+                <div class="form-group">
+                    <label>Background Music Volume (0 - 1)</label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="range" id="bgVolume" min="0" max="1" step="0.1" value="0.2" oninput="document.getElementById('volValue').innerText = this.value">
+                        <span id="volValue">0.2</span>
+                    </div>
+                </div>
             </div>
 
             <button class="btn-primary" onclick="joinCall()" id="joinBtn">
@@ -614,7 +622,8 @@ async def demo_page():
                             metadata: {
                                 crime_type: document.getElementById('crimeType').value,
                                 complexity: document.getElementById('crimeComplexity').value,
-                                user_role: document.getElementById('userRole').value
+                                user_role: document.getElementById('userRole').value,
+                                bg_volume: document.getElementById('bgVolume').value
                             }
                         })
                     });
