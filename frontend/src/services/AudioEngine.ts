@@ -1,4 +1,3 @@
-import type { RemoteAudioTrack, RemoteParticipant, Room } from 'livekit-client';
 import { clamp01 } from '../utils/math';
 
 export type AudioLevelsCallback = (agentId: string, level: number) => void;
@@ -12,12 +11,21 @@ const AMBIENCE_FILES: Record<string, string> = {
 
 const SFX_FILES: Record<string, string> = {
   GUNSHOT: '/assets/audio/sfx_gunshot.mp3',
+  TELEGRAM: '/assets/audio/sfx_gunshot.mp3',
+  HEARTBEAT: '/assets/audio/sfx_gunshot.mp3',
+  SIREN: '/assets/audio/sfx_gunshot.mp3',
+  CALL_DROP: '/assets/audio/sfx_gunshot.mp3',
+  FOOTSTEPS: '/assets/audio/sfx_gunshot.mp3',
+  DOOR_RATTLE: '/assets/audio/sfx_gunshot.mp3',
 };
 
 export class AudioEngine {
   private audioContext?: AudioContext;
   private ambienceAudio = new Audio();
   private ambienceGain?: GainNode;
+  private started = false;
+  private pendingAmbience?: keyof typeof AMBIENCE_FILES;
+  private audioAvailability = new Map<string, boolean>();
   private agentElements = new Map<string, HTMLAudioElement>();
   private agentAnalyser = new Map<string, AnalyserNode>();
   private agentGain = new Map<string, GainNode>();
@@ -34,11 +42,8 @@ export class AudioEngine {
     this.ambienceAudio.loop = true;
   }
 
-  attachRoom(room: Room) {
-    room.on('trackSubscribed', (track, _publication, participant) => {
-      if (track.kind !== 'audio') return;
-      this.attachRemoteTrack(track as RemoteAudioTrack, participant);
-    });
+  attachRoom(_room: unknown) {
+    // LiveKit client removed; remote audio tracks are not attached on the frontend.
   }
 
   async start() {
@@ -51,6 +56,11 @@ export class AudioEngine {
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
+    this.started = true;
+    if (this.pendingAmbience) {
+      void this.loadAmbience(this.pendingAmbience);
+      this.pendingAmbience = undefined;
+    }
     this.startLevelMonitoring();
   }
 
@@ -59,20 +69,22 @@ export class AudioEngine {
     this.rafId = undefined;
     this.agentElements.forEach((element) => element.pause());
     this.ambienceAudio.pause();
+    this.started = false;
   }
 
   setAmbience(track: keyof typeof AMBIENCE_FILES) {
-    const src = AMBIENCE_FILES[track];
-    if (src && this.ambienceAudio.src !== src) {
-      this.ambienceAudio.src = src;
-      this.ambienceAudio.play().catch(() => undefined);
+    if (!this.started) {
+      this.pendingAmbience = track;
+      return;
     }
+    void this.loadAmbience(track);
   }
 
   playSfx(name: keyof typeof SFX_FILES) {
-    const audio = new Audio(SFX_FILES[name]);
-    audio.volume = this.sfxVolume;
-    audio.play().catch(() => undefined);
+    if (!this.started) return;
+    const src = SFX_FILES[name];
+    if (!src) return;
+    void this.playSafe(src, this.sfxVolume);
   }
 
   setVolumes(agents: number, ambience: number, sfx: number) {
@@ -106,35 +118,43 @@ export class AudioEngine {
     if (gainNode) gainNode.gain.value = clamp01(value);
   }
 
+  private async canPlay(src: string) {
+    if (this.audioAvailability.has(src)) {
+      return this.audioAvailability.get(src) ?? false;
+    }
+    try {
+      const response = await fetch(src, { method: 'HEAD' });
+      const length = response.headers.get('content-length');
+      const available = response.ok && (length === null || Number(length) > 0);
+      this.audioAvailability.set(src, available);
+      return available;
+    } catch {
+      this.audioAvailability.set(src, false);
+      return false;
+    }
+  }
+
+  private async loadAmbience(track: keyof typeof AMBIENCE_FILES) {
+    const src = AMBIENCE_FILES[track];
+    if (!src) return;
+    if (!(await this.canPlay(src))) return;
+    if (this.ambienceAudio.src !== src) {
+      this.ambienceAudio.src = src;
+    }
+    this.ambienceAudio.play().catch(() => undefined);
+  }
+
+  private async playSafe(src: string, volume: number) {
+    if (!(await this.canPlay(src))) return;
+    const audio = new Audio(src);
+    audio.volume = volume;
+    audio.play().catch(() => undefined);
+  }
+
   private computeAgentVolume(agentId: string) {
     if (this.soloAgentId && this.soloAgentId !== agentId) return 0;
     if (this.mutedAgents.has(agentId)) return 0;
     return this.globalAgentVolume;
-  }
-
-  private attachRemoteTrack(track: RemoteAudioTrack, participant: RemoteParticipant) {
-    if (!this.audioContext) return;
-    const agentId = participant.identity || participant.sid;
-    if (this.agentElements.has(agentId)) return;
-
-    const element = document.createElement('audio');
-    element.autoplay = true;
-    element.playsInline = true;
-    element.style.display = 'none';
-    element.srcObject = new MediaStream([track.mediaStreamTrack]);
-    element.volume = this.computeAgentVolume(agentId);
-    document.body.appendChild(element);
-
-    const source = this.audioContext.createMediaElementSource(element);
-    const gainNode = this.audioContext.createGain();
-    source.connect(gainNode).connect(this.audioContext.destination);
-    const analyser = this.audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-
-    this.agentElements.set(agentId, element);
-    this.agentAnalyser.set(agentId, analyser);
-    this.agentGain.set(agentId, gainNode);
   }
 
   private startLevelMonitoring() {

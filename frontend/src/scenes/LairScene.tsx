@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { useDirectorStore } from '../state/directorStore';
+import { SCENE_LABELS, SCENE_TAGLINES } from '../utils/scenes';
 
 const LairScene = () => {
   const reducedMotion = useDirectorStore((s) => s.reducedMotion);
@@ -33,7 +34,10 @@ const LairScene = () => {
         }}
       />
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="text-center text-sm uppercase tracking-[0.4em] text-brass">Moriarty watches</div>
+        <div className="text-center">
+          <div className="text-sm uppercase tracking-[0.4em] text-brass">{SCENE_LABELS.LAIR}</div>
+          <div className="mt-2 text-[10px] uppercase tracking-[0.3em] text-fog">{SCENE_TAGLINES.LAIR}</div>
+        </div>
       </div>
     </div>
   );

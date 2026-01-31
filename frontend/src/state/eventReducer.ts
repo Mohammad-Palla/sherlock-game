@@ -8,6 +8,19 @@ export const applyBackendEvent = (state: DirectorState, event: BackendEvent): Di
       return {
         ...state,
         currentScene: event.scene as SceneId,
+        ...(event.scene === 'STUDY_NOIR'
+          ? {
+              evidence: [],
+              links: [],
+              captions: [],
+              locationLabel: undefined,
+              caseOutcome: undefined,
+              selectedClue: undefined,
+              deduction: undefined,
+              timer: undefined,
+              misdirected: false,
+            }
+          : {}),
       };
     case 'AGENT_SPEAKING': {
       const agent = state.agents[event.agentId];
@@ -60,6 +73,90 @@ export const applyBackendEvent = (state: DirectorState, event: BackendEvent): Di
         ...state,
         sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'GUNSHOT' }],
         flash: true,
+      };
+    case 'SFX_TELEGRAM':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'TELEGRAM' }],
+      };
+    case 'SFX_HEARTBEAT':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'HEARTBEAT' }],
+      };
+    case 'SFX_SIREN':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'SIREN' }],
+      };
+    case 'SFX_CALL_DROP':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'CALL_DROP' }],
+      };
+    case 'SFX_FOOTSTEPS':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'FOOTSTEPS' }],
+      };
+    case 'SFX_DOOR_RATTLE':
+      return {
+        ...state,
+        sfxQueue: [...state.sfxQueue, { id: randomId('sfx'), name: 'DOOR_RATTLE' }],
+      };
+    case 'TIMER_START':
+      return {
+        ...state,
+        timer: {
+          totalSeconds: event.seconds,
+          remainingSeconds: event.seconds,
+          running: true,
+        },
+        caseOutcome: undefined,
+      };
+    case 'TIMER_TICK':
+      if (!state.timer) return state;
+      return {
+        ...state,
+        timer: {
+          ...state.timer,
+          remainingSeconds: event.seconds,
+          running: event.seconds > 0,
+        },
+      };
+    case 'TIMER_PENALTY': {
+      if (!state.timer) return state;
+      const nextRemaining = Math.max(0, state.timer.remainingSeconds - event.seconds);
+      return {
+        ...state,
+        timer: {
+          ...state.timer,
+          remainingSeconds: nextRemaining,
+          running: nextRemaining > 0,
+        },
+      };
+    }
+    case 'LOCATION_CONFIRMED':
+      return {
+        ...state,
+        locationLabel: event.label,
+      };
+    case 'RESCUE_SUCCESS':
+      return {
+        ...state,
+        caseOutcome: 'SUCCESS',
+        timer: state.timer ? { ...state.timer, running: false } : state.timer,
+      };
+    case 'RESCUE_FAIL':
+      return {
+        ...state,
+        caseOutcome: 'FAIL',
+        timer: state.timer ? { ...state.timer, running: false } : state.timer,
+      };
+    case 'MISDIRECT':
+      return {
+        ...state,
+        misdirected: true,
       };
     case 'AMBIENCE_SET':
       return {

@@ -24,7 +24,7 @@ const BootScene = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1.4, ease: 'easeOut' }}
         >
-          Sherlock vs Moriarty
+          Sherlock & Watson vs Moriarty
         </motion.h1>
         <motion.p
           className="max-w-2xl text-sm uppercase tracking-[0.35em] text-fog"
@@ -32,7 +32,7 @@ const BootScene = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1.4, delay: 0.3 }}
         >
-          A live noir investigation where every whisper is a clue.
+          Watson advises. Moriarty taunts. You are Sherlock.
         </motion.p>
         <motion.div
           initial={reducedMotion ? false : { opacity: 0, y: 20 }}

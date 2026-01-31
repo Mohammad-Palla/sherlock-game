@@ -1,9 +1,8 @@
 import { motion } from 'framer-motion';
 import { useMemo } from 'react';
 import { useDirectorStore } from '../state/directorStore';
-import { SCENE_LABELS, SCENE_TAGLINES } from '../utils/scenes';
 
-const StudyScene = () => {
+const StudyNoirScene = () => {
   const evidence = useDirectorStore((s) => s.evidence);
   const links = useDirectorStore((s) => s.links);
   const reducedMotion = useDirectorStore((s) => s.reducedMotion);
@@ -17,14 +16,14 @@ const StudyScene = () => {
   }, [evidence]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-[#111014] via-[#1a1a22] to-black">
+    <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-[#0c0b10] via-[#17161f] to-black">
       <div className="noise vignette absolute inset-0" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(192,165,107,0.18),transparent_60%)]" />
-      <div className="absolute left-[8%] top-[20%] h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.05),transparent_70%)] blur-2xl" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(192,165,107,0.16),transparent_60%)]" />
+      <div className="absolute left-[10%] top-[18%] h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.05),transparent_70%)] blur-3xl" />
 
       <div className="absolute left-8 top-8 z-10">
-        <div className="text-xs uppercase tracking-[0.35em] text-brass">{SCENE_LABELS.STUDY}</div>
-        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-fog">{SCENE_TAGLINES.STUDY}</div>
+        <div className="text-xs uppercase tracking-[0.35em] text-brass">Case Scene</div>
+        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-fog">Mercury Chocolates</div>
       </div>
 
       <svg className="absolute inset-0 h-full w-full">
@@ -52,11 +51,11 @@ const StudyScene = () => {
       {evidence.map((item) => (
         <motion.div
           key={item.id}
-          className="absolute w-56 rounded-sm border border-parchment/20 bg-[#1f1c18]/70 p-4 text-parchment shadow-[0_12px_40px_rgba(0,0,0,0.6)]"
+          className="absolute w-60 rounded-sm border border-parchment/20 bg-[#1f1c18]/70 p-4 text-parchment shadow-[0_12px_40px_rgba(0,0,0,0.6)]"
           style={{ left: `${item.x}%`, top: `${item.y}%` }}
-          initial={reducedMotion ? false : { opacity: 0, y: 20, rotate: -2 }}
-          animate={{ opacity: 1, y: 0, rotate: 0 }}
-          transition={{ duration: 0.6, type: 'spring' }}
+          initial={reducedMotion ? false : { opacity: 0, y: 30, scale: 0.92 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.7, type: 'spring', bounce: 0.35 }}
           whileHover={reducedMotion ? {} : { rotate: 1, scale: 1.02 }}
         >
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-brass">Evidence</div>
@@ -75,4 +74,4 @@ const StudyScene = () => {
   );
 };
 
-export default StudyScene;
+export default StudyNoirScene;

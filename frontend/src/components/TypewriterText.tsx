@@ -10,17 +10,23 @@ const TypewriterText = ({ text, speed = 18 }: TypewriterTextProps) => {
 
   useEffect(() => {
     let frame = 0;
+    let rafId = 0;
+    let cancelled = false;
     const tick = () => {
+      if (cancelled) return;
       frame += 1;
       const nextLength = Math.min(text.length, Math.floor(frame / (60 / speed)) + 1);
       setDisplayed(text.slice(0, nextLength));
       if (nextLength < text.length) {
-        requestAnimationFrame(tick);
+        rafId = requestAnimationFrame(tick);
       }
     };
     setDisplayed('');
-    const raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   }, [text, speed]);
 
   return (

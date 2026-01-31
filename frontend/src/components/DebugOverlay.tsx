@@ -1,6 +1,7 @@
 import { useDirectorStore } from '../state/directorStore';
 import { useToastStore } from '../state/toastStore';
 import { BackendEvent, SceneId } from '../types';
+import { SCENE_LABELS } from '../utils/scenes';
 
 const DebugOverlay = () => {
   const dispatchEvent = useDirectorStore((s) => s.dispatchEvent);
@@ -15,7 +16,7 @@ const DebugOverlay = () => {
     pushToast(`Event: ${event.type}`);
   };
 
-  const scenes: SceneId[] = ['CRIME_SCENE', 'STUDY', 'LAIR'];
+  const scenes: SceneId[] = ['STUDY_NOIR', 'STREET_BAIT', 'UNDERPASS', 'CRIME_SCENE', 'STUDY', 'LAIR'];
 
   return (
     <div className="pointer-events-auto absolute bottom-6 left-6 w-72 rounded-lg border border-brass/30 bg-black/80 p-4 text-xs text-parchment backdrop-blur">
@@ -45,12 +46,24 @@ const DebugOverlay = () => {
           onClick={() =>
             sendEvent({
               type: 'CAPTION',
+              agentId: 'watson',
+              text: 'The ash is fresh. Someone left in a hurry.',
+            })
+          }
+        >
+          Watson Line
+        </button>
+        <button
+          className="case-button text-xs"
+          onClick={() =>
+            sendEvent({
+              type: 'CAPTION',
               agentId: 'moriarty',
               text: 'Every clue is a thread you cannot cut.',
             })
           }
         >
-          Villain Line
+          Moriarty Line
         </button>
         <button
           className="case-button text-xs"
@@ -73,7 +86,7 @@ const DebugOverlay = () => {
               className="rounded-full border border-brass px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-brass"
               onClick={() => setScene(scene)}
             >
-              {scene}
+              {SCENE_LABELS[scene]}
             </button>
           ))}
         </div>

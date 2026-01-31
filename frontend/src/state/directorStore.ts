@@ -13,7 +13,14 @@ const initialState: DirectorState = {
   sfxQueue: [],
   connectionStatus: 'disconnected',
   roomName: undefined,
+  playerName: 'Sherlock Holmes',
   latencyMs: undefined,
+  timer: undefined,
+  caseOutcome: undefined,
+  locationLabel: undefined,
+  selectedClue: undefined,
+  deduction: undefined,
+  misdirected: false,
   reducedMotion: false,
   subtitlesEnabled: true,
   volumes: {
@@ -28,11 +35,16 @@ type DirectorActions = {
   dispatchEvent: (event: BackendEvent) => void;
   setConnectionStatus: (status: DirectorState['connectionStatus']) => void;
   setRoomInfo: (roomName: string) => void;
+  setPlayerName: (value: string) => void;
   setLatency: (latencyMs?: number) => void;
   setAgents: (agents: DirectorState['agents']) => void;
   updateAgent: (id: string, partial: Partial<DirectorState['agents'][string]>) => void;
   setScene: (scene: SceneId) => void;
   consumeSfx: (id: string) => void;
+  setSelectedClue: (clue?: DirectorState['selectedClue']) => void;
+  setDeduction: (deduction?: DirectorState['deduction']) => void;
+  clearOutcome: () => void;
+  clearMisdirect: () => void;
   setReducedMotion: (value: boolean) => void;
   setSubtitlesEnabled: (value: boolean) => void;
   setVolume: (key: keyof DirectorState['volumes'], value: number) => void;
@@ -44,27 +56,38 @@ export type DirectorStore = DirectorState & DirectorActions & { eventSourceMode:
 
 export const useDirectorStore = create<DirectorStore>((set, get) => ({
   ...initialState,
-  eventSourceMode: 'mock',
+  eventSourceMode: 'backend',
   dispatchEvent: (event) => set((state) => applyBackendEvent(state, event)),
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   setRoomInfo: (roomName) => set({ roomName }),
+  setPlayerName: (playerName) => set({ playerName }),
   setLatency: (latencyMs) => set({ latencyMs }),
   setAgents: (agents) => set({ agents }),
   updateAgent: (id, partial) =>
-    set((state) => ({
-      agents: {
-        ...state.agents,
-        [id]: {
-          ...state.agents[id],
-          ...partial,
+    set((state) => {
+      const existing = state.agents[id];
+      if (!existing && !partial.name) {
+        return state;
+      }
+      return {
+        agents: {
+          ...state.agents,
+          [id]: {
+            ...(existing ?? { id, name: partial.name ?? id, role: partial.role ?? 'Agent' }),
+            ...partial,
+          },
         },
-      },
-    })),
+      };
+    }),
   setScene: (scene) => set({ currentScene: scene }),
   consumeSfx: (id) =>
     set((state) => ({
       sfxQueue: state.sfxQueue.filter((item) => item.id !== id),
     })),
+  setSelectedClue: (selectedClue) => set({ selectedClue }),
+  setDeduction: (deduction) => set({ deduction }),
+  clearOutcome: () => set({ caseOutcome: undefined }),
+  clearMisdirect: () => set({ misdirected: false }),
   setReducedMotion: (value) => set({ reducedMotion: value }),
   setSubtitlesEnabled: (value) => set({ subtitlesEnabled: value }),
   setVolume: (key, value) =>

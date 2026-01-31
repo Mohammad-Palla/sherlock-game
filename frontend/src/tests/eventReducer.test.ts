@@ -4,7 +4,7 @@ import { DirectorState } from '../state/types';
 
 const baseState: DirectorState = {
   currentScene: 'BOOT',
-  agents: { sherlock: { id: 'sherlock', name: 'Sherlock', role: 'Detective', level: 0 } },
+  agents: { watson: { id: 'watson', name: 'Dr. Watson', role: 'Companion', level: 0 } },
   evidence: [],
   links: [],
   captions: [],
@@ -12,7 +12,14 @@ const baseState: DirectorState = {
   sfxQueue: [],
   connectionStatus: 'disconnected',
   roomName: undefined,
+  playerName: 'Sherlock Holmes',
   latencyMs: undefined,
+  timer: undefined,
+  caseOutcome: undefined,
+  locationLabel: undefined,
+  selectedClue: undefined,
+  deduction: undefined,
+  misdirected: false,
   reducedMotion: false,
   subtitlesEnabled: true,
   volumes: {
@@ -40,7 +47,17 @@ describe('applyBackendEvent', () => {
   });
 
   it('adds caption', () => {
-    const next = applyBackendEvent(baseState, { type: 'CAPTION', agentId: 'sherlock', text: 'Observe.' });
+    const next = applyBackendEvent(baseState, { type: 'CAPTION', agentId: 'watson', text: 'Observe.' });
     expect(next.captions).toHaveLength(1);
+  });
+
+  it('starts timer', () => {
+    const next = applyBackendEvent(baseState, { type: 'TIMER_START', seconds: 120 });
+    expect(next.timer?.remainingSeconds).toBe(120);
+  });
+
+  it('marks misdirect', () => {
+    const next = applyBackendEvent(baseState, { type: 'MISDIRECT' });
+    expect(next.misdirected).toBe(true);
   });
 });

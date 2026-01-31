@@ -1,6 +1,7 @@
 import { motion, useAnimation } from 'framer-motion';
 import { useEffect } from 'react';
 import { useDirectorStore } from '../state/directorStore';
+import { SCENE_LABELS, SCENE_TAGLINES } from '../utils/scenes';
 
 const CrimeScene = () => {
   const evidence = useDirectorStore((s) => s.evidence);
@@ -36,6 +37,11 @@ const CrimeScene = () => {
           reducedMotion ? '' : 'animate-flicker'
         }`}
       />
+
+      <div className="absolute left-8 top-8 z-10">
+        <div className="text-xs uppercase tracking-[0.35em] text-brass">{SCENE_LABELS.CRIME_SCENE}</div>
+        <div className="mt-1 text-[10px] uppercase tracking-[0.3em] text-fog">{SCENE_TAGLINES.CRIME_SCENE}</div>
+      </div>
 
       <motion.div
         className="absolute bottom-[18%] left-[38%] h-24 w-40 rounded-full bg-[radial-gradient(circle,rgba(90,29,43,0.7),transparent_70%)] opacity-70"

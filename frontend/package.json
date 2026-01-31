@@ -13,7 +13,6 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "framer-motion": "^11.0.0",
-    "livekit-client": "^2.0.7",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.5.2"

@@ -1,26 +1,33 @@
-import { Room, RoomEvent } from 'livekit-client';
-
-export type LiveKitConnection = {
-  room: Room;
+const buildLiveKitWsUrl = (baseUrl: string, token: string) => {
+  const wsUrl = new URL(baseUrl);
+  if (wsUrl.protocol === 'http:') wsUrl.protocol = 'ws:';
+  if (wsUrl.protocol === 'https:') wsUrl.protocol = 'wss:';
+  if (!wsUrl.pathname || wsUrl.pathname === '/') {
+    wsUrl.pathname = '/rtc';
+  }
+  if (!wsUrl.searchParams.has('access_token')) {
+    wsUrl.searchParams.set('access_token', token);
+  }
+  return wsUrl.toString();
 };
 
-export const connectLiveKit = async (url: string, token: string) => {
-  const room = new Room({
-    adaptiveStream: true,
-    dynacast: true,
+export const connectLiveKit = (url: string, token: string) =>
+  new Promise<WebSocket>((resolve, reject) => {
+    const wsUrl = buildLiveKitWsUrl(url, token);
+    const socket = new WebSocket(wsUrl);
+    const handleOpen = () => {
+      socket.removeEventListener('error', handleError);
+      resolve(socket);
+    };
+    const handleError = () => {
+      socket.removeEventListener('open', handleOpen);
+      reject(new Error('Failed to open LiveKit WebSocket'));
+    };
+    socket.addEventListener('open', handleOpen, { once: true });
+    socket.addEventListener('error', handleError, { once: true });
   });
-  await room.connect(url, token);
-  return room;
-};
 
-export const monitorLatency = (room: Room, onLatency: (value: number) => void) => {
-  const handler = () => {
-    const stats = room.engine?.getRTCStats?.();
-    const latency = stats ? stats.maxRoundTripTime : undefined;
-    if (latency) onLatency(Math.round(latency * 1000));
-  };
-  const interval = window.setInterval(handler, 2000);
-  const cleanup = () => window.clearInterval(interval);
-  room.on(RoomEvent.Disconnected, cleanup);
-  return cleanup;
+export const monitorLatency = (_socket: WebSocket, onLatency: (value?: number) => void) => {
+  onLatency(undefined);
+  return () => undefined;
 };

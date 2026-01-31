@@ -4,6 +4,9 @@ import CrimeScene from '../scenes/CrimeScene';
 import StudyScene from '../scenes/StudyScene';
 import LairScene from '../scenes/LairScene';
 import BootScene from '../scenes/BootScene';
+import StudyNoirScene from '../scenes/StudyNoirScene';
+import StreetBaitScene from '../scenes/StreetBaitScene';
+import UnderpassScene from '../scenes/UnderpassScene';
 import { useDirectorStore } from '../state/directorStore';
 
 const sceneVariants = {
@@ -18,6 +21,12 @@ const SceneManager = () => {
 
   const renderScene = (scene: SceneId) => {
     switch (scene) {
+      case 'STUDY_NOIR':
+        return <StudyNoirScene />;
+      case 'STREET_BAIT':
+        return <StreetBaitScene />;
+      case 'UNDERPASS':
+        return <UnderpassScene />;
       case 'CRIME_SCENE':
         return <CrimeScene />;
       case 'STUDY':

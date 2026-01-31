@@ -2,13 +2,22 @@ import { useDirectorStore } from '../state/directorStore';
 import { clamp01 } from '../utils/math';
 
 const AgentPanel = () => {
-  const agents = useDirectorStore((s) => Object.values(s.agents));
+  const agents = useDirectorStore((s) =>
+    Object.values(s.agents).filter((agent) => agent.id && agent.name)
+  );
   const updateAgent = useDirectorStore((s) => s.updateAgent);
+  const playerName = useDirectorStore((s) => s.playerName);
 
   return (
     <div className="flex h-full w-72 flex-col gap-4 border-l border-brass/20 bg-black/40 p-4 backdrop-blur">
       <div className="text-xs uppercase tracking-[0.3em] text-brass">Agents</div>
       <div className="flex flex-col gap-3 overflow-y-auto pr-2">
+        {playerName ? (
+          <div className="rounded-md border border-brass/10 bg-black/30 p-3">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-fog">You</div>
+            <div className="font-serif text-sm text-parchment">{playerName}</div>
+          </div>
+        ) : null}
         {agents.length === 0 ? (
           <div className="text-xs text-fog">Awaiting agents...</div>
         ) : null}

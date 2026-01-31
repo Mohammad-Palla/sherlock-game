@@ -111,3 +111,16 @@ input[type='range']::-webkit-slider-runnable-track {
 .moriarty-glitch {
   animation: glitchPulse 1.8s infinite;
 }
+
+.fog-heavy {
+  background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.14), transparent 55%),
+    radial-gradient(circle at 80% 40%, rgba(255, 255, 255, 0.12), transparent 60%),
+    radial-gradient(circle at 50% 80%, rgba(255, 255, 255, 0.18), transparent 65%);
+  filter: blur(16px);
+  opacity: 0.7;
+}
+
+.flashlight-cone {
+  background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.85) 55%);
+  mix-blend-mode: screen;
+}
