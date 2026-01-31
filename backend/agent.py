@@ -2,7 +2,8 @@ import logging
 import os
 import sys
 import asyncio
-from typing import Optional
+import json
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 from persona import get_criminal_mindset_prompt
 from livekit.agents import (
@@ -84,9 +85,10 @@ vad_instance = None
 
 
 class WatsonActions:
-    def __init__(self, room: rtc.Room):
+    def __init__(self, room: rtc.Room, scene_actions: Optional["SceneActions"] = None):
         self.room = room
         self.watson_voice_id = "0ad65e7f-006c-47cf-bd31-52279d487913" # Official Watson Voice
+        self.scene_actions = scene_actions
 
     @llm.function_tool(description="Consult Dr. Watson for his medical or military opinion, or just for support.")
     async def ask_watson(self, query: str):
@@ -134,6 +136,12 @@ class WatsonActions:
         
         logger.info(f"Watson says: {watson_response_text}")
 
+        if self.scene_actions:
+            try:
+                await self.scene_actions.send_caption("watson", watson_response_text)
+            except Exception as e:
+                logger.warning(f"Failed to publish Watson caption: {e}")
+
         # 2. Synthesize Audio using Cartesia (Sonic-2)
         # We need to manually handle the audio source publication
         try:
@@ -169,6 +177,47 @@ class WatsonActions:
             logger.error(f"Watson TTS failed: {e}", exc_info=True)
 
         return f"Watson replied: '{watson_response_text}'"
+
+
+class SceneActions:
+    def __init__(self, room: rtc.Room):
+        self.room = room
+
+    async def _publish(self, payload: Dict[str, Any]) -> None:
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            if not self.room.local_participant:
+                logger.warning("SceneActions: local participant unavailable")
+                return
+            await self.room.local_participant.publish_data(
+                data,
+                kind=rtc.DataPacketKind.RELIABLE,
+                topic="story",
+            )
+        except Exception as e:
+            logger.warning(f"SceneActions publish failed: {e}")
+
+    @llm.function_tool(
+        description="Set the current scene for the UI. scene must be one of: study, market, underpass, landmark."
+    )
+    async def set_scene(self, scene: str) -> str:
+        scene_key = scene.strip().lower()
+        if scene_key not in {"study", "market", "underpass", "landmark"}:
+            scene_key = "study"
+        await self._publish({"type": "SCENE_SET", "scene": scene_key})
+        return f"Scene set to {scene_key}"
+
+    @llm.function_tool(
+        description="Send a caption line to the UI. speaker must be moriarty or watson."
+    )
+    async def send_caption(self, speaker: str, text: str) -> str:
+        speaker_key = speaker.strip().lower()
+        if speaker_key not in {"moriarty", "watson"}:
+            speaker_key = "moriarty"
+        await self._publish(
+            {"type": "CAPTION", "speaker": speaker_key, "text": text}
+        )
+        return "Caption sent"
 
 
 
@@ -236,22 +285,25 @@ async def entrypoint(ctx: JobContext):
     
 
     
+    scene_actions = SceneActions(room=ctx.room)
+
     if instructions:
-        watson = WatsonActions(room=ctx.room)
+        watson = WatsonActions(room=ctx.room, scene_actions=scene_actions)
         session = AgentSession(
             stt=stt_model,
             llm=openai.LLM(
                 model="o3-mini",
             ),
             tts=tts_model,
-            tools=[watson.ask_watson],
+            tools=[watson.ask_watson, scene_actions.set_scene, scene_actions.send_caption],
             preemptive_generation=False,
         )
     else:
-         session = AgentSession(
+        session = AgentSession(
             stt=stt_model,
             llm=openai.LLM(model="o3-mini"),
             tts=tts_model,
+            tools=[scene_actions.set_scene, scene_actions.send_caption],
             preemptive_generation=False,
         )
 
@@ -281,6 +333,22 @@ async def entrypoint(ctx: JobContext):
     
     # Connect to the room
     await ctx.connect()
+
+    # Set an initial scene for the UI as soon as the agent joins
+    await scene_actions.set_scene("study")
+    
+    async def _scene_timeline():
+        try:
+            await asyncio.sleep(8)
+            await scene_actions.set_scene("market")
+            await asyncio.sleep(6)
+            await scene_actions.set_scene("underpass")
+            await asyncio.sleep(6)
+            await scene_actions.set_scene("landmark")
+        except Exception as e:
+            logger.warning(f"Scene timeline error: {e}")
+
+    asyncio.create_task(_scene_timeline())
     
     # --------------------------------------------------------------------------
     # Audio Playback Logic

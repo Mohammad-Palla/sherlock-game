@@ -32,15 +32,8 @@ export default {
         float: 'float 6s ease-in-out infinite',
       },
       fontFamily: {
-        serif: [
-          'Iowan Old Style',
-          'Palatino Linotype',
-          'Book Antiqua',
-          'Palatino',
-          'Times New Roman',
-          'serif',
-        ],
-        sans: ['"Source Sans 3"', 'Avenir Next', 'Helvetica Neue', 'Arial', 'sans-serif'],
+        serif: ['Cormorant Garamond', 'Garamond', 'Palatino', 'Times New Roman', 'serif'],
+        sans: ['Source Sans 3', 'Avenir Next', 'Helvetica Neue', 'Arial', 'sans-serif'],
       },
     },
   },
