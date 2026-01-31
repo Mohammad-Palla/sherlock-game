@@ -1,11 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from livekit import api
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
+import asyncio
+import json
+import time
+from typing import Dict, List, Optional, Any, Set
 
 load_dotenv()
 
@@ -47,6 +51,294 @@ class KnowledgeBaseRequest(BaseModel):
     max_pages: int = 50
 
 
+class AgentInfo(BaseModel):
+    id: str
+    name: str
+    role: str
+
+
+class LiveKitJoinOptions(BaseModel):
+    room_name: Optional[str] = None
+    participant_name: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class JoinResponse(BaseModel):
+    token: str
+    url: str
+    roomName: str
+    identity: str
+    agents: List[AgentInfo]
+
+
+class CaseStartRequest(BaseModel):
+    room: str
+
+
+class CaseActionRequest(BaseModel):
+    room: str
+    action: str
+    choice: Optional[str] = None
+    guess: Optional[str] = None
+
+
+async def ensure_room(room_name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        meta_json = json.dumps(metadata or {})
+        try:
+            await lkapi.room.create_room(api.CreateRoomRequest(
+                name=room_name,
+                metadata=meta_json,
+                empty_timeout=10 * 60,
+            ))
+        except Exception:
+            await lkapi.room.update_room_metadata(api.UpdateRoomMetadataRequest(
+                room=room_name,
+                metadata=meta_json,
+            ))
+    finally:
+        await lkapi.aclose()
+
+
+async def issue_token(room_name: str, participant_name: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    await ensure_room(room_name, metadata)
+    participant_identity = f"{participant_name}_{os.urandom(4).hex()}"
+    token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    token.with_identity(participant_identity)
+    token.with_name(participant_name)
+    token.with_ttl(timedelta(hours=2))
+    token.with_grants(api.VideoGrants(
+        room_join=True,
+        room=room_name,
+        can_publish=True,
+        can_subscribe=True,
+        can_publish_data=True,
+    ))
+    return {
+        "token": token.to_jwt(),
+        "identity": participant_identity,
+    }
+
+
+class CaseRoomState:
+    def __init__(self, room: str) -> None:
+        self.room = room
+        self.subscribers: Set[asyncio.Queue[str]] = set()
+        self.started = False
+        self.timer_task: Optional[asyncio.Task] = None
+        self.timeline_task: Optional[asyncio.Task] = None
+        self.remaining_seconds = 0
+        self.timer_running = False
+        self.selected_clue: Optional[str] = None
+        self.deduction: Optional[str] = None
+        self.case_over = False
+
+
+class CaseDirector:
+    def __init__(self) -> None:
+        self.rooms: Dict[str, CaseRoomState] = {}
+
+    def get_room(self, room: str) -> CaseRoomState:
+        if room not in self.rooms:
+            self.rooms[room] = CaseRoomState(room)
+        return self.rooms[room]
+
+    def add_subscriber(self, room: str, queue: asyncio.Queue[str]) -> None:
+        state = self.get_room(room)
+        state.subscribers.add(queue)
+
+    def remove_subscriber(self, room: str, queue: asyncio.Queue[str]) -> None:
+        state = self.get_room(room)
+        state.subscribers.discard(queue)
+
+    async def emit(self, room: str, event: Dict[str, Any]) -> None:
+        state = self.get_room(room)
+        payload = json.dumps(event)
+        dead: List[asyncio.Queue[str]] = []
+        for queue in state.subscribers:
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                dead.append(queue)
+        for queue in dead:
+            state.subscribers.discard(queue)
+
+    async def emit_caption(self, room: str, agent_id: str, text: str) -> None:
+        for level in (0.2, 0.6, 0.9):
+            await self.emit(room, {"type": "AGENT_SPEAKING", "agentId": agent_id, "level": level})
+            await asyncio.sleep(0.12)
+        await self.emit(room, {"type": "CAPTION", "agentId": agent_id, "text": text})
+        await self.emit(room, {"type": "AGENT_SPEAKING", "agentId": agent_id, "level": 0.1})
+
+    async def start_timer(self, state: CaseRoomState, seconds: int) -> None:
+        state.remaining_seconds = seconds
+        state.timer_running = True
+        await self.emit(state.room, {"type": "TIMER_START", "seconds": seconds})
+        if state.timer_task:
+            state.timer_task.cancel()
+        state.timer_task = asyncio.create_task(self._run_timer(state))
+
+    async def apply_penalty(self, state: CaseRoomState, seconds: int) -> None:
+        state.remaining_seconds = max(0, state.remaining_seconds - seconds)
+        await self.emit(state.room, {"type": "TIMER_PENALTY", "seconds": seconds})
+        await self.emit(state.room, {"type": "TIMER_TICK", "seconds": state.remaining_seconds})
+        if state.remaining_seconds <= 0:
+            await self.fail_case(state)
+
+    async def _run_timer(self, state: CaseRoomState) -> None:
+        while state.timer_running and state.remaining_seconds > 0 and not state.case_over:
+            await asyncio.sleep(1)
+            state.remaining_seconds = max(0, state.remaining_seconds - 1)
+            await self.emit(state.room, {"type": "TIMER_TICK", "seconds": state.remaining_seconds})
+        if state.remaining_seconds <= 0 and not state.case_over:
+            await self.fail_case(state)
+
+    async def fail_case(self, state: CaseRoomState) -> None:
+        if state.case_over:
+            return
+        state.case_over = True
+        state.timer_running = False
+        await self.emit(state.room, {"type": "RESCUE_FAIL"})
+        await self.emit_caption(state.room, "watson", "We are out of time. We have to move anyway.")
+        await self.emit(state.room, {"type": "SFX_CALL_DROP"})
+
+    async def succeed_case(self, state: CaseRoomState) -> None:
+        if state.case_over:
+            return
+        state.case_over = True
+        state.timer_running = False
+        await self.emit(state.room, {"type": "RESCUE_SUCCESS"})
+        await self.emit(state.room, {"type": "SFX_CALL_DROP"})
+
+    async def start_case(self, room: str) -> None:
+        state = self.get_room(room)
+        state.started = True
+        state.case_over = False
+        state.selected_clue = None
+        state.deduction = None
+        state.remaining_seconds = 0
+        state.timer_running = False
+        if state.timeline_task:
+            state.timeline_task.cancel()
+        if state.timer_task:
+            state.timer_task.cancel()
+        state.timeline_task = asyncio.create_task(self._run_timeline(state))
+
+    async def _run_timeline(self, state: CaseRoomState) -> None:
+        start = time.monotonic()
+
+        async def wait_until(target: float) -> None:
+            delay = target - (time.monotonic() - start)
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        await self.emit(state.room, {"type": "SCENE_SET", "scene": "STUDY_NOIR"})
+        await self.emit(state.room, {"type": "AMBIENCE_SET", "track": "RAIN"})
+
+        await wait_until(2)
+        await self.emit_caption(state.room, "moriarty", "Evening, Sherlock. Two small lives are in my keeping for a moment.")
+        await wait_until(5)
+        await self.emit_caption(state.room, "watson", "Where are they?")
+        await wait_until(7)
+        await self.emit_caption(state.room, "moriarty", "They are eating chocolates. Sweet, but not safe.")
+        await wait_until(10)
+        await self.emit_caption(state.room, "moriarty", "Find them before the clock bites, or the papers will do the rest.")
+
+        await wait_until(15)
+        await self.emit(state.room, {"type": "SFX_TELEGRAM"})
+        await self.emit(state.room, {
+            "type": "EVIDENCE_ADD",
+            "id": "clue_a",
+            "title": "Clue A - Citrus Air Freshener",
+            "description": "Harsh and cheap. Someone is masking stale air.",
+            "x": 18,
+            "y": 28,
+        })
+        await self.emit(state.room, {
+            "type": "EVIDENCE_ADD",
+            "id": "clue_b",
+            "title": "Clue B - Cathedral Bell",
+            "description": "A bell noted at midnight. Too theatrical?",
+            "x": 48,
+            "y": 20,
+        })
+        await self.emit(state.room, {
+            "type": "EVIDENCE_ADD",
+            "id": "clue_c",
+            "title": "Clue C - Violin Case",
+            "description": "Placed to bait your ego.",
+            "x": 70,
+            "y": 34,
+        })
+        await self.emit(state.room, {
+            "type": "LINK_EVIDENCE",
+            "fromId": "clue_a",
+            "toId": "clue_c",
+        })
+
+        await wait_until(18)
+        await self.emit_caption(state.room, "moriarty", "Three clues. One true, one bait, one tailored to your vanity.")
+        await wait_until(20)
+        await self.start_timer(state, 240)
+        await wait_until(22)
+        await self.emit_caption(state.room, "watson", "This is not a game.")
+        await wait_until(24)
+        await self.emit_caption(state.room, "moriarty", "Everything is a game. You simply arrived late.")
+
+        await wait_until(28)
+        await self.emit(state.room, {"type": "SFX_HEARTBEAT"})
+        await self.emit(state.room, {"type": "AMBIENCE_SET", "track": "CLOCK"})
+        await self.emit_caption(state.room, "moriarty", "While you think, they take small bites. Brave, obedient.")
+
+        await wait_until(35)
+        if not state.deduction:
+            await self.emit_caption(state.room, "moriarty", "Indecision is a slow knife, Sherlock.")
+            await self.apply_penalty(state, 15)
+
+    async def handle_action(self, payload: CaseActionRequest) -> None:
+        state = self.get_room(payload.room)
+        if state.case_over:
+            return
+        if payload.action == "CHOOSE_CLUE":
+            state.selected_clue = payload.choice
+            if payload.choice == "A":
+                await self.emit_caption(state.room, "watson", "Citrus covers stale air. That means a sealed, shut-up space.")
+            return
+
+        if payload.action == "REQUEST_WATSON_HINT":
+            await self.emit_caption(state.room, "watson", "Don't chase the dramatic. Follow the practical: enclosed, damp, near the river.")
+            return
+
+        if payload.action == "DEDUCTION":
+            state.deduction = payload.guess
+            if payload.guess == "RIVER_UNDERPASS":
+                await self.emit(state.room, {
+                    "type": "LOCATION_CONFIRMED",
+                    "label": "Riverside Service Underpass - Gate 3",
+                })
+                await self.emit(state.room, {"type": "SCENE_SET", "scene": "UNDERPASS"})
+                await self.emit(state.room, {"type": "AMBIENCE_SET", "track": "ALLEY"})
+                await self.emit(state.room, {"type": "SFX_SIREN"})
+                await self.emit(state.room, {"type": "SFX_FOOTSTEPS"})
+                await self.emit(state.room, {"type": "SFX_DOOR_RATTLE"})
+                await self.emit_caption(state.room, "watson", "I'm calling it in - medical, hazmat, all of it. Go.")
+                await self.emit_caption(state.room, "moriarty", "There you are. You do love a chase.")
+                await asyncio.sleep(4)
+                await self.succeed_case(state)
+                await self.emit_caption(state.room, "moriarty", "Tonight you win their breathing. Tomorrow, I take what you cannot borrow back.")
+                return
+
+            await self.emit(state.room, {"type": "MISDIRECT"})
+            await self.emit(state.room, {"type": "SCENE_SET", "scene": "STREET_BAIT"})
+            await self.apply_penalty(state, 45)
+            await self.emit_caption(state.room, "moriarty", "A bell? Predictable. You chased the theater.")
+            await self.emit_caption(state.room, "watson", "Don't chase the dramatic. Chase the practical.")
+
+
+case_director = CaseDirector()
+
+
 @app.get("/")
 def root():
     return {
@@ -59,6 +351,10 @@ def root():
         },
         "endpoints": {
             "token": "/token",
+            "livekit_join": "/api/livekit/join",
+            "case_events": "/api/case/events",
+            "case_start": "/api/case/start",
+            "case_action": "/api/case/action",
             "demo": "/demo",
             "extract_kb": "/extract-knowledge-base"
         }
@@ -132,7 +428,72 @@ async def create_token(request: JoinRequest):
         raise HTTPException(status_code=500, detail=f"Failed to create token: {str(e)}")
 
 
+@app.post("/api/livekit/join", response_model=JoinResponse)
+async def join_livekit(payload: Optional[LiveKitJoinOptions] = None):
+    """Frontend join endpoint for Sherlock player."""
+    payload = payload or LiveKitJoinOptions()
+    room_name = payload.room_name or f"mercury-case-{os.urandom(3).hex()}"
+    participant_name = payload.participant_name or "Sherlock Holmes"
+    metadata = {
+        "case": "mercury_chocolates",
+        "crime_type": "contaminated chocolates abduction",
+        "complexity": "high",
+        "user_role": "Sherlock",
+        "bg_volume": 0.1,
+    }
+    if payload.metadata:
+        metadata.update(payload.metadata)
 
+    token_data = await issue_token(room_name, participant_name, metadata=metadata)
+
+    return JoinResponse(
+        token=token_data["token"],
+        url=LIVEKIT_URL,
+        roomName=room_name,
+        identity=token_data["identity"],
+        agents=[
+            AgentInfo(id="watson", name="Dr. Watson", role="Companion"),
+            AgentInfo(id="moriarty", name="Professor Moriarty", role="Antagonist"),
+        ],
+    )
+
+
+@app.get("/api/case/events")
+async def case_events(room: str):
+    if not room:
+        raise HTTPException(status_code=400, detail="Missing room")
+
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
+    case_director.add_subscriber(room, queue)
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield "event: keepalive\ndata: {}\n\n"
+        finally:
+            case_director.remove_subscriber(room, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/api/case/start")
+async def start_case(request: CaseStartRequest):
+    await case_director.start_case(request.room)
+    return {"status": "started"}
+
+
+@app.post("/api/case/action")
+async def case_action(request: CaseActionRequest):
+    await case_director.handle_action(request)
+    return {"status": "ok"}
 
 
 @app.get("/demo", response_class=HTMLResponse)
@@ -403,9 +764,24 @@ async def demo_page():
             <!-- Crime Scene Injection -->
             <div class="kb-section" style="margin-top: 20px; border-color: #7c3aed; background: #faf5ff;">
                 <h2 style="color: #6d28d9;">🕵️‍♀️ Crime Scene Settings</h2>
+                
+                <!-- Scenario Preset -->
+                <div class="form-group">
+                    <label>Scenario Preset</label>
+                    <select id="scenarioPreset" onchange="applyPreset()" style="width: 100%; padding: 14px; border: 2px solid #7c3aed; border-radius: 10px; background: #fff;">
+                        <option value="custom">Custom</option>
+                        <option value="indian_kidnap">Moriarty's Kidnapping (Indian Edition)</option>
+                        <option value="indian_bomb">Moriarty's Bombing Plot (Indian Edition)</option>
+                    </select>
+                </div>
+
                 <div class="form-group">
                     <label>Crime Type</label>
                     <input type="text" id="crimeType" placeholder="e.g. Bank Heist, Murder Mystery">
+                </div>
+                <div class="form-group">
+                    <label>Victim Name (if applicable)</label>
+                    <input type="text" id="victimName" placeholder="e.g. Priya, Rahul" value="">
                 </div>
                 <div class="form-group">
                     <label>Complexity</label>
@@ -428,6 +804,27 @@ async def demo_page():
                         <span id="volValue">0.2</span>
                     </div>
                 </div>
+
+                <script>
+                function applyPreset() {
+                    const preset = document.getElementById('scenarioPreset').value;
+                    if (preset === 'indian_kidnap') {
+                        document.getElementById('crimeType').value = 'Kidnapping (Indian Edition)';
+                        document.getElementById('victimName').value = 'Priya';
+                        document.getElementById('crimeComplexity').value = 'High';
+                        document.getElementById('userRole').value = 'Detective';
+                    } else if (preset === 'indian_bomb') {
+                        document.getElementById('crimeType').value = 'Bombing (Indian Edition)';
+                        document.getElementById('victimName').value = 'N/A';
+                        document.getElementById('crimeComplexity').value = 'Impossible';
+                        document.getElementById('userRole').value = 'Bomb Specialist';
+                    } else {
+                        document.getElementById('crimeType').value = '';
+                        document.getElementById('victimName').value = '';
+                        document.getElementById('crimeComplexity').value = '';
+                    }
+                }
+                </script>
             </div>
 
             <button class="btn-primary" onclick="joinCall()" id="joinBtn">
@@ -621,6 +1018,7 @@ async def demo_page():
                             participant_name: userName,
                             metadata: {
                                 crime_type: document.getElementById('crimeType').value,
+                                victim_name: document.getElementById('victimName').value,
                                 complexity: document.getElementById('crimeComplexity').value,
                                 user_role: document.getElementById('userRole').value,
                                 bg_volume: document.getElementById('bgVolume').value
@@ -779,7 +1177,6 @@ async def demo_page():
     </body>
     </html>
     """
-
 
 if __name__ == "__main__":
     import uvicorn

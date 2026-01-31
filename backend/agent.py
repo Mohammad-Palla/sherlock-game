@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import asyncio
 from typing import Optional
 from dotenv import load_dotenv
 from persona import get_criminal_mindset_prompt
@@ -12,13 +13,15 @@ from livekit.agents import (
     MetricsCollectedEvent,
     RoomInputOptions,
     WorkerOptions,
+    APIConnectOptions,
     cli,
     metrics,
 )
 from livekit.plugins import noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.plugins import deepgram, groq, cartesia, silero
-from livekit.agents import ChatContext, ChatMessage
+from livekit.plugins import deepgram, groq, cartesia, silero, openai
+from livekit.agents import ChatContext, ChatMessage, llm
+import aiohttp
+from livekit import rtc
 
 logger = logging.getLogger("agent-worker")
 logging.basicConfig(level=logging.INFO)
@@ -80,6 +83,95 @@ TONE: Professional yet friendly, helpful, and efficient. You're here to make the
 vad_instance = None
 
 
+class WatsonActions:
+    def __init__(self, room: rtc.Room):
+        self.room = room
+        self.watson_voice_id = "0ad65e7f-006c-47cf-bd31-52279d487913" # Official Watson Voice
+
+    @llm.function_tool(description="Consult Dr. Watson for his medical or military opinion, or just for support.")
+    async def ask_watson(self, query: str):
+        """
+        Consult Dr. Watson.
+
+        Args:
+            query: The question or statement to address to Dr. Watson
+        """
+        logger.info(f"🎤 Asking Watson: {query}")
+        
+        # 1. Generate Watson's text response using a separate LLM call
+        # We use a transient LLM instance for this to keep it simple
+        # watson_llm = openai.LLM(model="o3-mini")
+        watson_llm = groq.LLM(
+            model="openai/gpt-oss-20b",
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+        
+        system_prompt = """You are Dr. John Watson, Sherlock Holmes's loyal partner.
+        - You are British, practical, and grounded.
+        - You represent the user's ally against Moriarty.
+        - Speak with a British accent.
+        - Keep responses short (1-2 sentences).
+        - Do not solve the riddles, but offer medical/military insights.
+        - SUPPORT THE USER.
+        """
+        
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="system", content=system_prompt)
+        chat_ctx.add_message(role="user", content=query)
+        
+        try:
+            stream = watson_llm.chat(
+                chat_ctx=chat_ctx,
+                conn_options=APIConnectOptions(timeout=60.0)
+            )
+            watson_response_text = ""
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    watson_response_text += chunk.delta.content
+        except Exception as e:
+            logger.error(f"Watson LLM failed: {e}")
+            watson_response_text = "I cannot form a thought right now. The fog is too thick."
+        
+        logger.info(f"Watson says: {watson_response_text}")
+
+        # 2. Synthesize Audio using Cartesia (Sonic-2)
+        # We need to manually handle the audio source publication
+        try:
+             # Create source and track for Watson
+            source = rtc.AudioSource(24000, 1)
+            track = rtc.LocalAudioTrack.create_audio_track("watson_audio", source)
+            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            publication = await self.room.local_participant.publish_track(track, options)
+            
+            # Initialize Cartesia manually
+            # specific model and voice as requested/fixed
+            async with aiohttp.ClientSession() as http_session:
+                tts = cartesia.TTS(model="sonic-2", voice=self.watson_voice_id, http_session=http_session)
+
+                stream = tts.synthesize(text=watson_response_text)
+                
+                async for chunk in stream:
+                    # chunk is SynthesizedAudio
+                    # It has .frame which is rtc.AudioFrame
+                    if chunk.frame:
+                        await source.capture_frame(chunk.frame)
+                        
+            # Simple heuristic to prevent Moriarty from speaking over Watson
+            # Approx 15 chars per second
+            estimated_duration = len(watson_response_text) / 15.0
+            logger.info(f"Generated {len(watson_response_text)} chars. Waiting {estimated_duration:.2f}s for playback...")
+            await asyncio.sleep(estimated_duration)
+
+            # Clean up
+            await self.room.local_participant.unpublish_track(publication.sid)
+
+        except Exception as e:
+            logger.error(f"Watson TTS failed: {e}", exc_info=True)
+
+        return f"Watson replied: '{watson_response_text}'"
+
+
+
 def get_vad():
     """Get or initialize VAD instance"""
     global vad_instance
@@ -120,7 +212,7 @@ async def entrypoint(ctx: JobContext):
     # Parse metadata for custom instructions
     instructions = None
     stt_model = "deepgram/nova-3-general"#"assemblyai/universal-streaming:en"
-    llm_model = "openai/gpt-4.1-mini"
+    llm_model = "openai/gpt-4o-mini"
     tts_model = "cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
     
     try:
@@ -142,13 +234,27 @@ async def entrypoint(ctx: JobContext):
     # Initialize usage collector for metrics
     usage_collector = metrics.UsageCollector()
     
-    # Create agent session with configured models
-    session = AgentSession(
-        stt=stt_model,#"assemblyai/universal-streaming:en"
-        llm="openai/gpt-4.1-mini",
-        tts=tts_model,
-        preemptive_generation=True,  # Generate responses while user is speaking
-    )
+
+    
+    if instructions:
+        watson = WatsonActions(room=ctx.room)
+        session = AgentSession(
+            stt=stt_model,
+            llm=openai.LLM(
+                model="o3-mini",
+            ),
+            tts=tts_model,
+            tools=[watson.ask_watson],
+            preemptive_generation=False,
+        )
+    else:
+         session = AgentSession(
+            stt=stt_model,
+            llm=openai.LLM(model="o3-mini"),
+            tts=tts_model,
+            preemptive_generation=False,
+        )
+
     
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
@@ -259,15 +365,24 @@ async def entrypoint(ctx: JobContext):
     
     # --------------------------------------------------------------------------
     
+    # --------------------------------------------------------------------------
+    
     # 3. Dynamic Greeting based on Persona
+    # --------------------------------------------------------------------------
+    
+    # 3. Dynamic Greeting based on Persona
+    initial_greeting = "Hello. How can I help you today?"
     if instructions:
          initial_greeting = "Welcome Sherlock and Watson to the game of LIFE!"
          
+    # Audio playback logic and greeting are handled below
+    
     await session.say(
        initial_greeting,
        allow_interruptions=False,
     )
     logger.info(f"Agent successfully started in room: {ctx.room.name}")
+
 
 
 if __name__ == "__main__":
