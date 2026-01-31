@@ -96,9 +96,26 @@ async def entrypoint(ctx: JobContext):
     """
     logger.info(f"Starting agent for room: {ctx.room.name}")
     
-    # Get configuration from room metadata if available
-    room_metadata = ctx.room.metadata or "{}"
-    logger.info(f"RAW Room Metadata: {room_metadata}")
+    # Explicitly fetch fresh room metadata to avoid race conditions
+    room_metadata = ctx.room.metadata
+    
+    try:
+        from livekit import api
+        lkapi = api.LiveKitAPI(os.getenv("LIVEKIT_URL"), os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET"))
+        rooms = await lkapi.room.list_rooms(api.ListRoomsRequest(names=[ctx.room.name]))
+        if rooms.rooms:
+            room_metadata = rooms.rooms[0].metadata
+            logger.info(f"🔄 FRESH METADATA FETCHED: {room_metadata}")
+        await lkapi.aclose()
+    except Exception as e:
+        logger.warning(f"Failed to fetch fresh metadata, using context metadata: {e}")
+
+    if not room_metadata:
+        logger.warning("⚠️ NO ROOM METADATA FOUND. Persona will default to standard assistant.")
+    else:
+        logger.info(f"✅ METADATA RECEIVED: {room_metadata}")
+    
+    room_metadata = room_metadata or "{}"
     
     # Parse metadata for custom instructions
     instructions = None

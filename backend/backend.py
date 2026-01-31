@@ -76,25 +76,29 @@ async def create_token(request: JoinRequest):
             meta_json = json.dumps(request.metadata)
             
             try:
-                # Try to create room with metadata (handles if it doesn't exist)
-                # If it exists, we might need to update it.
-                # Simplest check: List rooms to see if it exists
-                rooms = await lkapi.room.list_rooms(api.ListRoomsRequest(names=[request.room_name]))
+                # Strategy: Try to create room first (ensures it exists and sets metadata)
+                # If it exists, this might fail or return the existing room (depending on API version).
+                # To be safe, we wrap in try/except and fallback to update.
+                print(f"Attempting to set metadata for room: {request.room_name}")
                 
-                if rooms.rooms:
-                    # Update existing room
+                try:
+                    await lkapi.room.create_room(api.CreateRoomRequest(
+                        name=request.room_name,
+                        metadata=meta_json,
+                        empty_timeout=10 * 60, # Keep alive for 10 mins if empty
+                    ))
+                    print(f"Created room '{request.room_name}' with metadata.")
+                except Exception as create_err:
+                    # If creation failed, assume it exists and try to update
+                    print(f"Room creation note (likely exists): {create_err}. Updating metadata...")
                     await lkapi.room.update_room_metadata(api.UpdateRoomMetadataRequest(
                         room=request.room_name,
                         metadata=meta_json
                     ))
-                else:
-                    # Create new room with metadata
-                    await lkapi.room.create_room(api.CreateRoomRequest(
-                        name=request.room_name,
-                        metadata=meta_json
-                    ))
+                    print(f"Updated metadata for room '{request.room_name}'.")
+                    
             except Exception as e:
-                print(f"Warning: Failed to update room metadata: {e}")
+                print(f"ERROR: Failed to set room metadata: {e}")
             finally:
                 await lkapi.aclose()
 
